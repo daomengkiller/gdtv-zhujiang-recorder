@@ -11,7 +11,8 @@ export TZ="${TZ:-$TZ_CN}"
 
 START_HHMM="${START_HHMM:-21:00}"
 END_HHMM="${END_HHMM:-22:00}"
-WAIT_MAX_MIN="${WAIT_MAX_MIN:-40}"
+WAIT_MAX_MIN="${WAIT_MAX_MIN:-70}"
+CATCHUP_MAX_MIN="${CATCHUP_MAX_MIN:-180}"  # 窗口结束后还能补录多久
 DURATION_OVERRIDE="${DURATION:-0}"       # >0 时忽略时间窗，立刻录这么多秒（测试用）
 MIN_BYTES="${MIN_BYTES:-500000}"          # 小于此大小的产物视为失败
 # 转码档位：off(直接复制，约 1.1GB/小时) | 720p(约 0.5GB/小时，电视下载友好) | 480p(约 0.3GB/小时)
@@ -33,6 +34,24 @@ end_epoch="$(TZ=$TZ_CN date -d "${TODAY} ${END_HHMM}" +%s)"
 now="$(date +%s)"
 log "今天窗口: ${TODAY} ${START_HHMM}-${END_HHMM} (${start_epoch} → ${end_epoch})，当前 epoch=${now}"
 
+skip_job() {
+  log "$*"
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    echo "SKIPPED=1" >> "$GITHUB_ENV"
+  fi
+  exit 0
+}
+
+# ---------- 0. 幂等：今天已经录过就跳过（多个 cron 槽位靠它去重） ----------
+if [ "${FORCE:-0}" != "1" ] && [ "${DURATION_OVERRIDE:-0}" = "0" ] \
+   && [ -n "${GITHUB_REPOSITORY:-}" ] && command -v gh >/dev/null 2>&1; then
+  today_tag="rec-$(TZ=$TZ_CN date +%Y%m%d)-"
+  if gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+       --json tagName --jq '.[].tagName' 2>/dev/null | grep -q "^${today_tag}"; then
+    skip_job "今天已有录制（${today_tag}*），本次不重复录"
+  fi
+fi
+
 # ---------- 1. 决定录制时长 ----------
 if [ "${DURATION_OVERRIDE}" -gt 0 ] 2>/dev/null; then
   rec_seconds="${DURATION_OVERRIDE}"
@@ -42,7 +61,7 @@ else
   while [ "$now" -lt "$start_epoch" ]; do
     remain=$((start_epoch - now))
     if [ "$remain" -gt $((WAIT_MAX_MIN * 60)) ]; then
-      die "离开始还有 $((remain / 60)) 分钟，超过 WAIT_MAX_MIN=${WAIT_MAX_MIN}，本次不录（说明 cron 触发过于提前）"
+      skip_job "离开始还有 $((remain / 60)) 分钟，超过 WAIT_MAX_MIN=${WAIT_MAX_MIN}，本次让位给后面的 cron 槽位"
     fi
     sleep_for=$((remain > 60 ? 60 : remain))
     log "等待开始，剩余 $((remain / 60))m$((remain % 60))s"
@@ -51,13 +70,13 @@ else
   done
 
   if [ "$now" -ge "$end_epoch" ]; then
-    # cron 严重延迟，窗口已结束：延迟 15 分钟内仍录满 1 小时（宁可偏晚也不要漏录）
+    # cron 严重延迟、窗口已过：CATCHUP_MAX_MIN 分钟内仍补录完整 1 小时（宁可偏晚也不要漏录）
     late=$((now - end_epoch))
-    if [ "$late" -le 900 ]; then
+    if [ "$late" -le $((CATCHUP_MAX_MIN * 60)) ]; then
       rec_seconds=$((end_epoch - start_epoch))
-      log "cron 延迟 ${late}s，窗口已过：按完整 ${rec_seconds}s 补录"
+      log "cron 延迟 ${late}s，窗口已过：补录完整 ${rec_seconds}s"
     else
-      die "窗口已于 $((late / 60)) 分钟前结束，本次跳过"
+      skip_job "窗口已于 $((late / 60)) 分钟前结束，超过补录上限 ${CATCHUP_MAX_MIN} 分钟，本次跳过"
     fi
   else
     rec_seconds=$((end_epoch - now))
