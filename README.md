@@ -55,7 +55,8 @@ Actions → record-gdtv-zhujiang → Run workflow
 1. 下载 `android-latest` Release 里的 `gdtv-recorder.apk`；
 2. U 盘/ADB sideload 到电视盒子：`adb install -r gdtv-recorder.apk`；
 3. 打开即播最新录制；**OK** = 历史录制列表；**菜单键** = 设置（可改 owner/repo）；
-4. 遥控器：左右 = 快退/快进 10 秒，播放暂停键 = 暂停，返回 = 退出。
+4. 遥控器：左右 = 快退/快进 10 秒，播放暂停键 = 暂停，返回 = 退出；
+5. 国内直连 GitHub 慢时，在设置里填"下载加速前缀"（例如 `https://gh-proxy.com/`），视频会走该前缀下载。
 
 > 仓库需为 **public**（Release 资源可直接下载）。换成别的仓库时，在 APK 设置里改 `owner/repo` 即可，无需重新打包。
 

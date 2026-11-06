@@ -58,6 +58,7 @@ public class MainActivity extends Activity {
     private String owner;
     private String repo;
     private String token;
+    private String proxy;
 
     private boolean dialogOpen = false;
     private boolean hintShown = false;
@@ -71,6 +72,7 @@ public class MainActivity extends Activity {
         owner = sp.getString("owner", DEF_OWNER);
         repo = sp.getString("repo", DEF_REPO);
         token = sp.getString("token", "");
+        proxy = sp.getString("proxy", "");
 
         buildUi();
         loadReleases(true);
@@ -248,7 +250,17 @@ public class MainActivity extends Activity {
         exec.execute(new Runnable() {
             @Override
             public void run() {
-                final String realUrl = GitHubApi.resolveRedirect(r.url, token);
+                final String realUrl;
+                if (proxy != null && proxy.trim().length() > 0) {
+                    // 走了加速前缀就不再自己解析 302，交给前缀服务处理
+                    String p = proxy.trim();
+                    if (!p.endsWith("/")) {
+                        p = p + "/";
+                    }
+                    realUrl = p + r.url;
+                } else {
+                    realUrl = GitHubApi.resolveRedirect(r.url, token);
+                }
                 ui.post(new Runnable() {
                     @Override
                     public void run() {
@@ -328,10 +340,23 @@ public class MainActivity extends Activity {
         e2.setText(token);
         box.addView(e2);
 
+        TextView l3 = new TextView(this);
+        l3.setText("下载加速前缀（可选，国内直连 GitHub 慢时填，例如 https://gh-proxy.com/）");
+        l3.setPadding(0, dp(16), 0, 0);
+        box.addView(l3);
+
+        final EditText e3 = new EditText(this);
+        e3.setSingleLine(true);
+        e3.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        e3.setText(proxy);
+        box.addView(e3);
+
         dialogOpen = true;
+        android.widget.ScrollView scroller = new android.widget.ScrollView(this);
+        scroller.addView(box);
         AlertDialog d = new AlertDialog.Builder(this)
                 .setTitle("设置")
-                .setView(box)
+                .setView(scroller)
                 .setPositiveButton("保存并刷新", new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialog, int which) {
@@ -344,8 +369,9 @@ public class MainActivity extends Activity {
                             toast("格式应为 owner/repo，已忽略");
                         }
                         token = e2.getText().toString().trim();
+                        proxy = e3.getText().toString().trim();
                         sp.edit().putString("owner", owner).putString("repo", repo)
-                                .putString("token", token).apply();
+                                .putString("token", token).putString("proxy", proxy).apply();
                         loadReleases(true);
                     }
                 })
