@@ -41,6 +41,7 @@ env:
   START_HHMM: ${{ github.event.inputs.start || '21:00' }}
   END_HHMM: ${{ github.event.inputs.end || '22:00' }}
   DURATION: ${{ github.event.inputs.duration || '0' }}
+  WAIT_MAX_MIN: '70'
   STREAM_URLS: ${{ github.event.inputs.stream_urls }}
   TRANSCODE: ${{ github.event.inputs.transcode || '720p' }}
   # ---- 存储配额：超出后从最旧的录制开始删 ----
