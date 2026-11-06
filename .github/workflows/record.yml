@@ -69,14 +69,12 @@ jobs:
         run: |
           set -euo pipefail
           echo "上传 $OUT_NAME ($((OUT_BYTES/1024/1024)) MiB) → $OUT_TAG"
+          NOTES=$(printf '频道: 广东珠江 https://www.gdtv.cn/tvChannelDetail/44\n录制时段: %s-%s (Asia/Shanghai)\n文件: %s\n大小: %s MiB\n触发: %s / %s' \
+            "$START_HHMM" "$END_HHMM" "$OUT_NAME" "$((OUT_BYTES/1024/1024))" "$GITHUB_EVENT_NAME" "$(git rev-parse --short HEAD)")
           gh release create "$OUT_TAG" "$OUT_FILE" \
             --repo "$GITHUB_REPOSITORY" \
             --title "广东珠江 ${OUT_TAG#rec-}" \
-            --notes "频道: 广东珠江 (gdtv.cn/tvChannelDetail/44)
-录制时段: ${TZ:-Asia/Shanghai} ${START_HHMM}-${END_HHMM}
-文件: ${OUT_NAME}
-大小: $((OUT_BYTES/1024/1024)) MiB
-触发: ${GITHUB_EVENT_NAME} / $(git rev-parse --short HEAD)" \
+            --notes "$NOTES" \
             --latest
 
       - name: 按配额清理最旧录制
