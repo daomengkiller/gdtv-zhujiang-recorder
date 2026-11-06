@@ -11,7 +11,7 @@ set -uo pipefail
 TZ_CN="Asia/Shanghai"
 export TZ="${TZ:-$TZ_CN}"
 ARM_FROM="${ARM_FROM:-2045}"             # 布防起点 HHMM
-ARM_TO="${ARM_TO:-2205}"                 # 布防终点 HHMM
+ARM_TO="${ARM_TO:-2200}"                 # 布防终点 HHMM（直播不能回看，过了 22:00 就不再开录）
 ARM_HHMM="${ARM_HHMM:-20:45}"            # daemon 内部等到的整点（与 ARM_FROM 对应）
 MAX_RUNTIME="${MAX_RUNTIME:-21000}"      # 安全上限 5h50m
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

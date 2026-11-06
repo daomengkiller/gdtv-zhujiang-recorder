@@ -4,11 +4,10 @@ name: record-gdtv-zhujiang
 # 每天中国时区 21:00-22:00 录制，成片上传 Release，并按配额自动删最旧。
 on:
   schedule:
-    # 三个槽位互为备份：GitHub 的 cron 经常整体延迟，甚至某天直接丢掉一次，
-    # 脚本自带幂等（当天已录过就退出），所以多开几个槽位不会重复录。
+    # 备份槽位：GitHub 的 cron 对某些仓库不生效/会整体延迟（2026-11-06 实测 0 次触发）。
+    # 真正的触发主力是 chain.yml（自维持链）；这里留着当第二保险，脚本幂等不会重复录。
     - cron: '30 12 * * *'   # 20:30 CST 启动，等到 21:00 开录
-    - cron: '20 13 * * *'   # 21:20 CST 兜底（错过第一槽时录到 22:00）
-    - cron: '20 14 * * *'   # 22:20 CST 兜底（窗口已过则补录完整 1 小时）
+    - cron: '20 13 * * *'   # 21:20 CST 兜底（错过第一槽时录到 22:00 的剩余部分）
   workflow_dispatch:
     inputs:
       start:
@@ -45,7 +44,6 @@ env:
   END_HHMM: ${{ github.event.inputs.end || '22:00' }}
   DURATION: ${{ github.event.inputs.duration || '0' }}
   WAIT_MAX_MIN: '70'
-  CATCHUP_MAX_MIN: '180'
   STREAM_URLS: ${{ github.event.inputs.stream_urls }}
   TRANSCODE: ${{ github.event.inputs.transcode || '720p' }}
   # ---- 存储配额：超出后从最旧的录制开始删 ----

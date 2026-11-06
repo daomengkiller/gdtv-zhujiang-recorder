@@ -12,7 +12,6 @@ export TZ="${TZ:-$TZ_CN}"
 START_HHMM="${START_HHMM:-21:00}"
 END_HHMM="${END_HHMM:-22:00}"
 WAIT_MAX_MIN="${WAIT_MAX_MIN:-70}"
-CATCHUP_MAX_MIN="${CATCHUP_MAX_MIN:-180}"  # 窗口结束后还能补录多久
 DURATION_OVERRIDE="${DURATION:-0}"       # >0 时忽略时间窗，立刻录这么多秒（测试用）
 MIN_BYTES="${MIN_BYTES:-500000}"          # 小于此大小的产物视为失败
 # 转码档位：off(直接复制，约 1.1GB/小时) | 720p(约 0.5GB/小时，电视下载友好) | 480p(约 0.3GB/小时)
@@ -70,14 +69,8 @@ else
   done
 
   if [ "$now" -ge "$end_epoch" ]; then
-    # cron 严重延迟、窗口已过：CATCHUP_MAX_MIN 分钟内仍补录完整 1 小时（宁可偏晚也不要漏录）
-    late=$((now - end_epoch))
-    if [ "$late" -le $((CATCHUP_MAX_MIN * 60)) ]; then
-      rec_seconds=$((end_epoch - start_epoch))
-      log "cron 延迟 ${late}s，窗口已过：补录完整 ${rec_seconds}s"
-    else
-      skip_job "窗口已于 $((late / 60)) 分钟前结束，超过补录上限 ${CATCHUP_MAX_MIN} 分钟，本次跳过"
-    fi
+    # 直播不能回看：过了窗口再开录，录到的是下一档节目，属于错误内容 → 宁可漏，不要错
+    skip_job "已过 ${END_HHMM}（晚了 $(((now - end_epoch) / 60)) 分钟），直播窗口已结束，本次不录"
   else
     rec_seconds=$((end_epoch - now))
     log "正常开录，录到窗口结束共 ${rec_seconds}s"
