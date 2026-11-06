@@ -1,0 +1,20 @@
+# 构建产物
+out/
+dist/
+build/
+.gradle/
+local.properties
+*.apk
+*.mp4
+*.ts
+
+# 本地密钥（绝不要提交）
+*.jks
+*.keystore
+keystore.properties
+
+# 编辑器
+.idea/
+*.iml
+.DS_Store
+Thumbs.db

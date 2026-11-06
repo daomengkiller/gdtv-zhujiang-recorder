@@ -1,0 +1,65 @@
+name: build-android-tv-apk
+
+on:
+  push:
+    paths:
+      - 'app/**'
+      - 'settings.gradle'
+      - 'build.gradle'
+      - 'gradle.properties'
+      - 'gradlew'
+      - 'gradle/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-apk
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: 确认 Android SDK 组件
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0" >/dev/null || true
+          ls "$ANDROID_HOME/platforms"
+
+      - name: 构建 APK
+        run: chmod +x ./gradlew && ./gradlew --no-daemon assembleDebug
+
+      - name: 归档到 Release (android-latest)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/gdtv-recorder.apk
+          ls -lh dist
+          gh release view android-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create android-latest --repo "$GITHUB_REPOSITORY" \
+                 --title "Android TV 客户端 APK" \
+                 --notes "广东珠江录制回放 TV 客户端。下载 gdtv-recorder.apk 后 adb install -r 或 U 盘安装。" \
+                 --latest=false
+          gh release upload android-latest dist/gdtv-recorder.apk --repo "$GITHUB_REPOSITORY" --clobber
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gdtv-recorder-apk
+          path: dist/gdtv-recorder.apk
+          if-no-files-found: error

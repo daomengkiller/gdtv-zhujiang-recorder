@@ -1,0 +1,50 @@
+name: probe-streams
+
+# 排障用：手动跑，检查 scripts/streams.txt 里哪个源现在可用，并打印分辨率/码率。
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: '每个源试录秒数'
+        required: false
+        default: '10'
+
+permissions:
+  contents: read
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg curl
+
+      - name: 逐个探测
+        shell: bash
+        run: |
+          set -uo pipefail
+          SECS="${{ github.event.inputs.seconds || '10' }}"
+          UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+          mapfile -t URLS < <(sed -e 's/[[:space:]]*$//' scripts/streams.txt | grep -v -E '^[[:space:]]*(#|$)')
+          echo "共 ${#URLS[@]} 个候选源"
+          for u in "${URLS[@]}"; do
+            echo "==================== $u"
+            body="$(curl -fsSL --max-time 15 -A "$UA" "$u" 2>/dev/null | head -c 200 || true)"
+            case "$body" in
+              \#EXTM3U*) echo "  playlist: OK" ;;
+              *) echo "  playlist: FAIL"; continue ;;
+            esac
+            rm -f /tmp/p.mp4
+            ffmpeg -hide_banner -loglevel error -user_agent "$UA" -rw_timeout 15000000 \
+              -i "$u" -t "$SECS" -c copy -y /tmp/p.mp4 && \
+              ffprobe -v error -show_entries stream=codec_name,width,height,avg_frame_rate:format=duration,size \
+                -of default=noprint_wrappers=1 /tmp/p.mp4 || echo "  录制失败"
+          done

@@ -1,0 +1,107 @@
+name: record-gdtv-zhujiang
+
+# 广东珠江（https://www.gdtv.cn/tvChannelDetail/44）
+# 每天中国时区 21:00-22:00 录制，成片上传 Release，并按配额自动删最旧。
+on:
+  schedule:
+    # 20:30 Asia/Shanghai 启动（cron 常延迟数分钟），脚本会在 21:00 才真正开录
+    - cron: '30 12 * * *'
+  workflow_dispatch:
+    inputs:
+      start:
+        description: '开始时间 HH:MM (Asia/Shanghai)'
+        required: false
+        default: '21:00'
+      end:
+        description: '结束时间 HH:MM (Asia/Shanghai)'
+        required: false
+        default: '22:00'
+      duration:
+        description: '覆盖时长(秒)，>0 时立即录制这么久，忽略时间窗（测试用，如 90）'
+        required: false
+        default: '0'
+      stream_urls:
+        description: '临时指定直播源(逗号分隔，留空用 scripts/streams.txt)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: record-gdtv-zhujiang
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Shanghai
+  START_HHMM: ${{ github.event.inputs.start || '21:00' }}
+  END_HHMM: ${{ github.event.inputs.end || '22:00' }}
+  DURATION: ${{ github.event.inputs.duration || '0' }}
+  STREAM_URLS: ${{ github.event.inputs.stream_urls }}
+  # ---- 存储配额：超出后从最旧的录制开始删 ----
+  KEEP_BYTES: '8000000000'   # 约 8 GiB
+  KEEP_COUNT: '30'           # 最多 30 期
+  KEEP_MIN: '3'              # 至少保留 3 期
+  KEEP_DAYS: '0'             # >0 时同时限制保留天数
+
+jobs:
+  record:
+    name: 录制 广东珠江
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg curl
+          ffmpeg -version | head -1
+
+      - name: 录制
+        shell: bash
+        run: bash scripts/record.sh
+
+      - name: 上传到 Release
+        if: env.OUT_FILE != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "上传 $OUT_NAME ($((OUT_BYTES/1024/1024)) MiB) → $OUT_TAG"
+          gh release create "$OUT_TAG" "$OUT_FILE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "广东珠江 ${OUT_TAG#rec-}" \
+            --notes "频道: 广东珠江 (gdtv.cn/tvChannelDetail/44)
+录制时段: ${TZ:-Asia/Shanghai} ${START_HHMM}-${END_HHMM}
+文件: ${OUT_NAME}
+大小: $((OUT_BYTES/1024/1024)) MiB
+触发: ${GITHUB_EVENT_NAME} / $(git rev-parse --short HEAD)" \
+            --latest
+
+      - name: 按配额清理最旧录制
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/prune.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --keep-bytes "$KEEP_BYTES" \
+            --keep-count "$KEEP_COUNT" \
+            --keep-min "$KEEP_MIN" \
+            --keep-days "$KEEP_DAYS"
+
+      - name: 摘要
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "### 广东珠江录制"
+            echo ""
+            echo "- 产物: \`${OUT_NAME:-无}\` ${OUT_BYTES:+, $((OUT_BYTES/1024/1024)) MiB}"
+            echo "- Release: \`${OUT_TAG:-无}\`"
+            echo "- 当前 Release 用量:"
+            echo '```'
+            gh release list --repo "$GITHUB_REPOSITORY" --limit 40 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
