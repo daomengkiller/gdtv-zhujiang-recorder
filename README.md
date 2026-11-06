@@ -50,15 +50,19 @@ Actions → record-gdtv-zhujiang → Run workflow
 ```
 测试可以填 `duration: 90`，立刻录 90 秒验证链路。
 
-## APK 安装
+## APK 安装与操作
 
 1. 下载 `android-latest` Release 里的 `gdtv-recorder.apk`；
 2. U 盘/ADB sideload 到电视盒子：`adb install -r gdtv-recorder.apk`；
-3. 打开即播最新录制；**OK** = 历史录制列表；**菜单键** = 设置（可改 owner/repo）；
-4. 遥控器：左右 = 快退/快进 10 秒，播放暂停键 = 暂停，返回 = 退出；
-5. 国内直连 GitHub 慢时，在设置里填"下载加速前缀"（例如 `https://gh-proxy.com/`），视频会走该前缀下载。
+3. **打开即播最新一期**（和电视播放器一样全屏播放）；
+4. **返回键**回到列表，上下键选片，**OK** 播放选中的那期；
+5. 播放中：**OK** 呼出/收起控制条（进度+时间），**← →** 快退/快进 10 秒，播放/暂停键切换，**返回**回列表；
+6. 列表最下面两行是「⟳ 刷新列表」和「⚙ 设置」，按 OK 进入；
+   - 设置里可改 `owner/repo`（换成别的仓库不用重装 APK）、GitHub Token；
+   - 国内直连 GitHub 慢时填"下载加速前缀"（例如 `https://gh-proxy.com/`），视频走该前缀下载。
+7. 菜单键在任意界面都能呼出设置。
 
-> 仓库需为 **public**（Release 资源可直接下载）。换成别的仓库时，在 APK 设置里改 `owner/repo` 即可，无需重新打包。
+> 仓库需为 **public**（Release 资源可直接下载）。
 
 ## 直播源说明
 

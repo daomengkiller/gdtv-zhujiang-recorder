@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="row_focus">#FF1E88E5</color>
+    <color name="row_text">#FFFFFFFF</color>
+    <color name="row_meta">#B3FFFFFF</color>
+    <color name="bar_bg">#CC000000</color>
+</resources>
