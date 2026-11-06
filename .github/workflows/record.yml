@@ -68,6 +68,8 @@ jobs:
 
       - name: 录制
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/record.sh
 
       - name: 上传到 Release
