@@ -33,10 +33,14 @@ Android TV APK  →  GitHub API 列 Release  →  自动播最新 / OK 键选历
 | `START_HHMM` | `21:00` | 开始录制（Asia/Shanghai） |
 | `END_HHMM` | `22:00` | 结束录制 |
 | `WAIT_MAX_MIN` | `40` | 最多提前/延迟等待多少分钟仍开录 |
+| `TRANSCODE` | `720p` | `720p`≈0.7 GB/时（电视下载友好）/ `480p`≈0.4 GB/时 / `off` 直接复制 1080p≈1.1 GB/时 |
 | `KEEP_BYTES` | `8000000000` | Release 总容量上限（约 8 GiB），超出删最旧 |
 | `KEEP_COUNT` | `30` | 最多保留多少期 |
 | `KEEP_MIN` | `3` | 无论配额如何，至少保留最近 3 期 |
 | `KEEP_DAYS` | `0` | >0 时同时删除超过 N 天的录制 |
+
+> 每天成功录制后会更新 `docs/heartbeat.json` 并自动提交，用来**保活**——
+> GitHub 会在仓库 60 天无活动后自动停用定时工作流，这一步保证它一直跑。
 
 ## 手动触发
 

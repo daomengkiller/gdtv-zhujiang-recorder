@@ -24,6 +24,10 @@ on:
         description: '临时指定直播源(逗号分隔，留空用 scripts/streams.txt)'
         required: false
         default: ''
+      transcode:
+        description: '转码档位: 720p(默认) / 480p / off(直接复制，最大画质但体积大)'
+        required: false
+        default: '720p'
 
 permissions:
   contents: write
@@ -38,6 +42,7 @@ env:
   END_HHMM: ${{ github.event.inputs.end || '22:00' }}
   DURATION: ${{ github.event.inputs.duration || '0' }}
   STREAM_URLS: ${{ github.event.inputs.stream_urls }}
+  TRANSCODE: ${{ github.event.inputs.transcode || '720p' }}
   # ---- 存储配额：超出后从最旧的录制开始删 ----
   KEEP_BYTES: '8000000000'   # 约 8 GiB
   KEEP_COUNT: '30'           # 最多 30 期
@@ -87,6 +92,20 @@ jobs:
             --keep-count "$KEEP_COUNT" \
             --keep-min "$KEEP_MIN" \
             --keep-days "$KEEP_DAYS"
+
+      - name: 保活心跳（GitHub 60 天无活动会停用定时任务）
+        if: env.OUT_FILE != ''
+        run: |
+          set -euo pipefail
+          mkdir -p docs
+          printf '{\n  "last_run": "%s",\n  "last_release": "%s",\n  "file": "%s",\n  "bytes": %s\n}\n' \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$OUT_TAG" "$OUT_NAME" "$OUT_BYTES" > docs/heartbeat.json
+          cat docs/heartbeat.json
+          git config user.name "gdtv-recorder-bot"
+          git config user.email "gdtv-recorder-bot@users.noreply.github.com"
+          git add docs/heartbeat.json
+          git commit -m "chore: heartbeat ${OUT_TAG}" || exit 0
+          git push
 
       - name: 摘要
         if: always()

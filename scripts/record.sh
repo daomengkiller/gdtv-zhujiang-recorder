@@ -14,6 +14,8 @@ END_HHMM="${END_HHMM:-22:00}"
 WAIT_MAX_MIN="${WAIT_MAX_MIN:-40}"
 DURATION_OVERRIDE="${DURATION:-0}"       # >0 时忽略时间窗，立刻录这么多秒（测试用）
 MIN_BYTES="${MIN_BYTES:-500000}"          # 小于此大小的产物视为失败
+# 转码档位：off(直接复制，约 1.1GB/小时) | 720p(约 0.5GB/小时，电视下载友好) | 480p(约 0.3GB/小时)
+TRANSCODE="${TRANSCODE:-720p}"
 OUT_DIR="${OUT_DIR:-out}"
 UA="${UA:-Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -99,19 +101,44 @@ for url in "${CANDIDATES[@]}"; do
     log "  跳过：不是有效 m3u8"
     continue
   fi
-  log "  使用该源开始录制 → ${out_file}"
+  log "  使用该源开始录制 → ${out_file} (转码档位: ${TRANSCODE})"
   rm -f "$tmp_file"
-  ffmpeg -hide_banner -loglevel warning -stats \
-    -user_agent "$UA" \
-    ${REFERER:+-headers "Referer: ${REFERER}"$'\r\n'} \
-    -rw_timeout 20000000 \
-    -fflags +genpts+discardcorrupt \
-    -i "$url" \
-    -t "$rec_seconds" \
-    -c copy -bsf:a aac_adtstoasc \
-    -movflags +faststart \
-    -avoid_negative_ts make_zero \
-    -y "$tmp_file"
+  case "$TRANSCODE" in
+    off|copy)
+      ffmpeg -hide_banner -loglevel warning -stats \
+        -user_agent "$UA" \
+        ${REFERER:+-headers "Referer: ${REFERER}"$'\r\n'} \
+        -rw_timeout 20000000 \
+        -fflags +genpts+discardcorrupt \
+        -i "$url" \
+        -t "$rec_seconds" \
+        -c copy -bsf:a aac_adtstoasc \
+        -movflags +faststart \
+        -avoid_negative_ts make_zero \
+        -y "$tmp_file"
+      ;;
+    *)
+      case "$TRANSCODE" in
+        720p) VF="scale=-2:720:flags=lanczos"; MAXRATE="1600k"; BUF="3200k" ;;
+        480p) VF="scale=-2:480:flags=lanczos"; MAXRATE="900k";  BUF="1800k" ;;
+        *)    log "  未知转码档位 ${TRANSCODE}，回退 720p"; VF="scale=-2:720:flags=lanczos"; MAXRATE="1600k"; BUF="3200k" ;;
+      esac
+      ffmpeg -hide_banner -loglevel warning -stats \
+        -user_agent "$UA" \
+        ${REFERER:+-headers "Referer: ${REFERER}"$'\r\n'} \
+        -rw_timeout 20000000 \
+        -fflags +genpts+discardcorrupt \
+        -i "$url" \
+        -t "$rec_seconds" \
+        -vf "$VF" \
+        -c:v libx264 -preset veryfast -profile:v high -pix_fmt yuv420p \
+        -maxrate "$MAXRATE" -bufsize "$BUF" -g 50 \
+        -c:a aac -b:a 128k -ac 2 \
+        -movflags +faststart \
+        -avoid_negative_ts make_zero \
+        -y "$tmp_file"
+      ;;
+  esac
   rc=$?
   size=$(stat -c %s "$tmp_file" 2>/dev/null || echo 0)
   log "  ffmpeg 退出码=${rc} 产物=${size}B"
