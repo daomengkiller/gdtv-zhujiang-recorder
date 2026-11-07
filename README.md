@@ -116,6 +116,10 @@ Actions → record-gdtv-zhujiang → Run workflow
 7. 菜单键在任意界面都能呼出设置。
 
 > 仓库需为 **public**（Release 资源可直接下载）。
+>
+> **签名固定**：CI 从仓库 secret（`KEYSTORE_B64` / `KEYSTORE_PASS` / `KEY_ALIAS` / `KEY_PASS`）还原
+> `app/gdtv.jks`，构建 `assembleRelease`，证书 `CN=GDTV Recorder`。
+> 所以后续版本可以直接 `adb install -r` 覆盖安装，不用先卸载丢设置。
 
 ## 直播源说明
 
