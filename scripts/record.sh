@@ -41,13 +41,15 @@ skip_job() {
   exit 0
 }
 
-# ---------- 0. 幂等：今天已经录过就跳过（多个 cron 槽位靠它去重） ----------
+# ---------- 0. 幂等：今天 21 点这一档已经录过就跳过 ----------
+# 只看 tag 前缀 rec-YYYYMMDD-21（21:xx 开始的那一期），
+# 这样白天做的手动测试片段（比如 18:19 的 20 秒）不会挡住晚上的正式录制。
 if [ "${FORCE:-0}" != "1" ] && [ "${DURATION_OVERRIDE:-0}" = "0" ] \
    && [ -n "${GITHUB_REPOSITORY:-}" ] && command -v gh >/dev/null 2>&1; then
-  today_tag="rec-$(TZ=$TZ_CN date +%Y%m%d)-"
+  today_tag="rec-$(TZ=$TZ_CN date +%Y%m%d)-21"
   if gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
        --json tagName --jq '.[].tagName' 2>/dev/null | grep -q "^${today_tag}"; then
-    skip_job "今天已有录制（${today_tag}*），本次不重复录"
+    skip_job "今天 21 点这档已录过（${today_tag}*），本次不重复录"
   fi
 fi
 
