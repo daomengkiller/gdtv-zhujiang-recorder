@@ -82,9 +82,9 @@ public class MainActivity extends Activity {
     private String pendingUrl = null;
 
     private LinearLayout osdTop, osdBottom;
-    private TextView titleText, speedText, timeText, speedBtn;
+    private TextView titleText, speedText, timeText;
     private SeekBar seekBar;
-    private Button playBtn;
+    private Button playBtn, speedBtn;
     private Button[] buttons;
     private ProgressBar spinner;
     private boolean osdVisible = false;
