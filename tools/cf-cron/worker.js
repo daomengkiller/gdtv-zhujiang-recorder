@@ -5,34 +5,43 @@
  * 派发时刻不可控（实测迟到 3~8 小时）。Worker 的 Cron Trigger 是准点的，
  * 一次 fetch 就能把 workflow_dispatch 打过去。
  *
- * 部署：
- *   npm i -g wrangler && wrangler login
- *   wrangler secret put GH_TOKEN        # 粘一个带 repo+workflow 权限的 PAT
- *   wrangler deploy
- *
- * 手动验证（部署后会给你一个 https://gdtv-cron.<你的子域>.workers.dev 地址）：
- *   curl "https://gdtv-cron.<子域>.workers.dev/?key=<PROBE_KEY>"
+ * 环境变量（wrangler secret / API 写入）：
+ *   GH_TOKEN  必填，带 repo + workflow 权限的 PAT
+ *   OWNER / REPO / WORKFLOW / REF  可选，默认指向本项目的录制工作流
+ *   PROBE_KEY 可选，设置后 HTTP 入口需要 ?key= 匹配
  */
 
 export default {
   // Cron Trigger 入口（wrangler.toml 里配 "30 12 * * *" = 20:30 CST）
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(dispatch(env, "cron"));
+    ctx.waitUntil(dispatch(env, "cron", {}));
   },
 
-  // HTTP 入口，方便手动点一次；带 PROBE_KEY 时校验，避免被随便打
+  // HTTP 入口：手动点一次 / 带参数测试
+  //   /?key=xxx                → 正常触发（等待到 21:00 再录）
+  //   /?key=xxx&duration=20    → 立即录 20 秒（测试链路）
   async fetch(request, env) {
     const url = new URL(request.url);
     if (env.PROBE_KEY && url.searchParams.get("key") !== env.PROBE_KEY) {
       return new Response("forbidden", { status: 403 });
     }
-    const res = await dispatch(env, "manual");
-    const text = await res.text();
-    return new Response(`${res.status} ${text}\n`, { status: res.status === 204 ? 200 : res.status });
+
+    const inputs = {};
+    for (const [k, v] of url.searchParams.entries()) {
+      if (k === "key") continue;
+      inputs[k] = v;
+    }
+
+    const res = await dispatch(env, "manual", inputs);
+    const text = res.status === 204 ? "dispatched" : await res.text();
+    return new Response(`${res.status} ${text}\n`, {
+      status: res.status === 204 ? 200 : res.status,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
   },
 };
 
-async function dispatch(env, via) {
+async function dispatch(env, via, inputs) {
   const owner = env.OWNER || "daomengkiller";
   const repo = env.REPO || "gdtv-zhujiang-recorder";
   const workflow = env.WORKFLOW || "record-zhujiang.yml";
@@ -41,6 +50,11 @@ async function dispatch(env, via) {
   if (!env.GH_TOKEN) {
     console.error(`[${via}] GH_TOKEN 未配置`);
     return new Response("missing GH_TOKEN", { status: 500 });
+  }
+
+  const payload = { ref };
+  if (inputs && Object.keys(inputs).length > 0) {
+    payload.inputs = inputs;
   }
 
   const url = `https://api.github.com/repos/${owner}/${repo}/actions/workflows/${workflow}/dispatches`;
@@ -53,10 +67,10 @@ async function dispatch(env, via) {
       "User-Agent": "gdtv-cron-worker",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ ref }),
+    body: JSON.stringify(payload),
   });
 
-  const body = res.status === 204 ? "dispatched" : await res.text();
-  console.log(`[${via}] ${new Date().toISOString()} → ${res.status} ${body}`);
-  return new Response(body, { status: res.status });
+  const detail = res.status === 204 ? "dispatched" : await res.text();
+  console.log(`[${via}] ${new Date().toISOString()} → ${res.status} ${detail} ${JSON.stringify(inputs || {})}`);
+  return new Response(detail, { status: res.status });
 }

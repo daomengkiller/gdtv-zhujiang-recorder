@@ -39,13 +39,12 @@ Android TV APK  →  GitHub API 列 Release  →  自动播最新 / OK 键选历
 | `KEEP_MIN` | `3` | 无论配额如何，至少保留最近 3 期 |
 | `KEEP_DAYS` | `0` | >0 时同时删除超过 N 天的录制 |
 
-### 定时触发：实测出来的真相（重要）
+### 定时触发：交给 Cloudflare Worker，不用 GitHub 的 schedule
 
-2026-11-06 第一次没录，排查结论不是脚本、也不是时区（cron 一律按 **UTC** 解析，
-`30 12` 就是 20:30 CST；时区错只会跑错点，不会 0 条 run）。真实原因更麻烦：
-**这个环境的调度器不是按 cron 时间派发，而是按固定扫描窗口批量派发**，派发时刻总被"吸"到
+2026-11-06 第一次没录，排查结论不是脚本、也不是时区（cron 一律按 **UTC** 解析）。真实原因是：
+**这个环境的调度器不是按 cron 时间派发，而是按固定扫描窗口批量派发**——派发时刻总被"吸"到
 UTC 01:30–03:45 / 13:30–15:00 / 21:50–24:00 三簇（= CST 09:30–11:45 / 21:30–23:00 / 05:50–08:00），
-所以 cron 写几点都落不进 16:20–21:00 这个"等待区"。
+cron 写几点都落不进 16:20–21:00 这个"等待区"，还会白烧 Actions 额度。
 
 实测数据（同一账号其他仓库，长期运行）：
 
@@ -53,21 +52,29 @@ UTC 01:30–03:45 / 13:30–15:00 / 21:50–24:00 三簇（= CST 09:30–11:45 /
 | --- | --- | --- | --- |
 | `devops/签到` | `45 22 * * *` | 01:27 / 01:48 / 02:41 / 02:45 / 02:48 | +3~4h |
 | `devops/签到TLY` | `45 6,18 * * *` | 13:47 / 14:37 / 14:53 / 21:52 / 23:30 / 23:56 | +7~8h / +3~5h |
-| 本仓库新加的 `*/5` 探针 | 每 5 分钟 | 各仓库只触发 **1 次**（21:24Z 前后） | — |
 
-所以不跟调度器较劲，改成**一次 run 自己撑到 21:00**：
+**所以本仓库不用 `schedule`**（`workflow_dispatch` 是唯一入口），改由
+**Cloudflare Worker 的 Cron Trigger 每天 20:30 CST 打一次**：
 
-* cron `0 */6 * * *`（每 6 小时一次），保证"今天至少被派发一次"；
-* run 内部有 4 个**串行 job** 接力 `sleep`（每个 job 上限 6 小时，`scripts/hold.sh`），
-  合计约 22.7 小时，能把任意派发时刻拖到 21:00——不派发、不需要 PAT；
-* `record.sh` 再兜底等 4h40m，落进 `[21:00, 22:00)` 就录；过了 22:00 明确报"漏录"，不录错档节目；
-* 幂等：当天已有 `rec-YYYYMMDD-*` 就退出，多次派发不会重复录。
+```
+Workers → gdtv-cron → Triggers: 30 12 * * *   (UTC 12:30 = CST 20:30)
+           │  POST /actions/workflows/record-zhujiang.yml/dispatches
+           ▼
+record-gdtv-zhujiang（单个 job，约 1.5 小时）
+   record.sh 等到 21:00 → ffmpeg 录 60 分钟 → Release → prune → heartbeat
+```
+
+* 单 job，`timeout-minutes: 150`，每天只跑 1 次 ≈ 1.5 小时额度（不再有 20+ 小时的等待链）；
+* `record.sh` 会自己等 `WAIT_MAX_MIN=45` 分钟，CF 早几分钟晚几分钟都不影响准点开录；
+* 落进 `[21:00, 22:00)` 就录；过了 22:00 明确报"漏录"，不录错档节目；
+* 幂等：当天已有 `rec-YYYYMMDD-*` 就退出，重复触发不会重复录。
 
 > 直播不能回看：只在 `[21:00, 22:00)` 内开录，过期不补。
 
-> **想彻底不看 GitHub 调度器脸色**：用免费无服务器定时器直接打 `workflow_dispatch`，
-> 见 `tools/README.md`（Cloudflare Workers Cron / Google Apps Script / AWS EventBridge Scheduler 三套现成方案）。
-> 外部打点和仓库内 cron 可以并存，幂等保证不重复录。
+> Worker 的手动入口（带 key）：
+> `curl "https://gdtv-cron.2463508647.workers.dev/?key=<PROBE_KEY>"`；
+> 想验证链路可加 `&duration=15` 立即录 15 秒。
+> 其他可选触发方案（Google Apps Script / AWS EventBridge）见 `tools/README.md`。
 
 > 每天成功录制后会更新 `docs/heartbeat.json` 并自动提交，用来**保活**——
 > GitHub 会在仓库 60 天无活动后自动停用定时工作流。
