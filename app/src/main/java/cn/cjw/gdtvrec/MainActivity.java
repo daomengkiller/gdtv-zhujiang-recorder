@@ -6,14 +6,20 @@ import android.content.DialogInterface;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.media.MediaPlayer;
+import android.media.PlaybackParams;
+import android.net.TrafficStats;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Process;
 import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
@@ -27,7 +33,6 @@ import android.widget.ProgressBar;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.widget.VideoView;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -35,19 +40,20 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * 广东珠江录制回放（Android TV）—— 标准 TV 播放器交互：
+ * 广东珠江录制回放（Android TV）—— 传统 TV 播放器交互：
  *
  *   列表页：上下选片，OK 播放；列表底部还有「刷新」「设置」两行；
- *   播放页：OK 呼出/收起控制条（进度 + 快进快退），← → 快退快进 10 秒，
- *           播放/暂停键切换，返回键回到列表。
+ *   播放页：OK 呼出控制条（进度 / 播放暂停 / ±10 秒 / 倍速 / 播放列表 / 右上角网速），
+ *           15 秒无操作自动收起回到全屏；返回键也收起（再按回列表）。
  *
- * 打开即播最新一期；按返回立刻回到列表挑历史。
+ * 打开即播最新一期。
  */
 public class MainActivity extends Activity {
 
     private static final String PREFS = "gdtv";
     private static final String DEF_OWNER = "daomengkiller";
     private static final String DEF_REPO = "gdtv-zhujiang-recorder";
+    private static final int OSD_TIMEOUT_MS = 15000;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService exec = Executors.newSingleThreadExecutor();
@@ -55,31 +61,34 @@ public class MainActivity extends Activity {
 
     // 配置
     private SharedPreferences sp;
-    private String owner;
-    private String repo;
-    private String token;
-    private String proxy;
+    private String owner, repo, token, proxy;
 
     // 列表页
     private LinearLayout listScreen;
-    private TextView listHeader;
-    private TextView listStatus;
+    private TextView listHeader, listStatus;
     private ListView list;
     private RowAdapter adapter;
 
     // 播放页
     private FrameLayout playerScreen;
-    private VideoView video;
-    private LinearLayout osd;
-    private TextView osdTitle;
-    private TextView osdPos;
-    private SeekBar osdSeek;
-    private ProgressBar spinner;
-
+    private SurfaceView surface;
+    private MediaPlayer player;
+    private boolean surfaceReady = false;
+    private boolean prepared = false;
+    private boolean playing = false;
     private boolean playerMode = false;
     private boolean dialogOpen = false;
-    private boolean osdVisible = false;
     private int currentIndex = 0;
+    private String pendingUrl = null;
+
+    private LinearLayout osdTop, osdBottom;
+    private TextView titleText, speedText, timeText, speedBtn;
+    private SeekBar seekBar;
+    private Button playBtn;
+    private ProgressBar spinner;
+    private boolean osdVisible = false;
+    private float speedFactor = 1.0f;
+    private long lastRx = -1;
 
     // ---------------------------------------------------------------- 生命周期
 
@@ -100,17 +109,23 @@ public class MainActivity extends Activity {
     }
 
     private int dp(int v) {
-        return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
-                getResources().getDisplayMetrics());
+        return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics());
     }
 
-    // ---------------------------------------------------------------- UI 构建
+    // ---------------------------------------------------------------- UI
 
     private void buildUi() {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
+        root.addView(buildListScreen(), new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        root.addView(buildPlayerScreen(), new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        playerScreen.setVisibility(View.GONE);
+        setContentView(root);
+    }
 
-        // ---------- 列表页 ----------
+    private View buildListScreen() {
         listScreen = new LinearLayout(this);
         listScreen.setOrientation(LinearLayout.VERTICAL);
         listScreen.setBackgroundColor(Color.parseColor("#0E1116"));
@@ -143,9 +158,8 @@ public class MainActivity extends Activity {
                 onRowClicked(position);
             }
         });
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-        listScreen.addView(list, lp);
+        listScreen.addView(list, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
         TextView footer = new TextView(this);
         footer.setText("上下选择　·　OK 播放　·　菜单键 设置　·　返回 退出");
@@ -153,101 +167,181 @@ public class MainActivity extends Activity {
         footer.setTextColor(Color.parseColor("#80FFFFFF"));
         footer.setPadding(dp(28), dp(10), dp(28), dp(18));
         listScreen.addView(footer);
+        return listScreen;
+    }
 
-        root.addView(listScreen, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        // ---------- 播放页 ----------
+    private View buildPlayerScreen() {
         playerScreen = new FrameLayout(this);
         playerScreen.setBackgroundColor(Color.BLACK);
 
-        video = new VideoView(this);
-        FrameLayout.LayoutParams vp = new FrameLayout.LayoutParams(
+        surface = new SurfaceView(this);
+        FrameLayout.LayoutParams sp2 = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        vp.gravity = Gravity.CENTER;
-        playerScreen.addView(video, vp);
-
-        video.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+        sp2.gravity = Gravity.CENTER;
+        playerScreen.addView(surface, sp2);
+        surface.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override
-            public void onPrepared(MediaPlayer mp) {
-                spinner.setVisibility(View.GONE);
-                video.start();
-                osdTitle.setText(items.isEmpty() ? "" : items.get(Math.min(currentIndex, items.size() - 1))
-                        .label());
-                showOsd(true);
-            }
-        });
-        video.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
-            @Override
-            public void onCompletion(MediaPlayer mp) {
-                toast("播放结束");
-                showListScreen(false);
-            }
-        });
-        video.setOnErrorListener(new MediaPlayer.OnErrorListener() {
-            @Override
-            public boolean onError(MediaPlayer mp, int what, int extra) {
-                spinner.setVisibility(View.GONE);
-                toast("播放失败(" + what + "/" + extra + ")，换一期试试");
-                showListScreen(false);
-                return true;
-            }
-        });
-        video.setOnInfoListener(new MediaPlayer.OnInfoListener() {
-            @Override
-            public boolean onInfo(MediaPlayer mp, int what, int extra) {
-                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
-                    spinner.setVisibility(View.VISIBLE);
-                } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END
-                        || what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
-                    spinner.setVisibility(View.GONE);
+            public void surfaceCreated(SurfaceHolder holder) {
+                surfaceReady = true;
+                if (player != null) {
+                    player.setSurface(holder.getSurface());
                 }
-                return false;
+                if (pendingUrl != null) {
+                    String u = pendingUrl;
+                    pendingUrl = null;
+                    startPlayback(u);
+                }
+            }
+
+            @Override
+            public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+            }
+
+            @Override
+            public void surfaceDestroyed(SurfaceHolder holder) {
+                surfaceReady = false;
             }
         });
 
-        // 控制条（OSD）
-        osd = new LinearLayout(this);
-        osd.setOrientation(LinearLayout.VERTICAL);
-        osd.setBackgroundColor(Color.parseColor("#CC000000"));
-        osd.setPadding(dp(32), dp(14), dp(32), dp(16));
-        osd.setVisibility(View.GONE);
+        // ---- 顶部：标题 + 右上角网速 ----
+        osdTop = new LinearLayout(this);
+        osdTop.setOrientation(LinearLayout.HORIZONTAL);
+        osdTop.setBackgroundColor(Color.parseColor("#99000000"));
+        osdTop.setPadding(dp(28), dp(14), dp(28), dp(14));
+        osdTop.setGravity(Gravity.CENTER_VERTICAL);
 
-        osdTitle = new TextView(this);
-        osdTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
-        osdTitle.setTextColor(Color.WHITE);
-        osd.addView(osdTitle);
+        titleText = new TextView(this);
+        titleText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        titleText.setTextColor(Color.WHITE);
+        titleText.setMaxLines(1);
+        titleText.setLayoutParams(new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        osdTop.addView(titleText);
 
-        osdSeek = new SeekBar(this);
-        osdSeek.setFocusable(false);
-        osdSeek.setClickable(false);
-        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(28));
-        slp.topMargin = dp(6);
-        osd.addView(osdSeek, slp);
+        speedText = new TextView(this);
+        speedText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        speedText.setTextColor(Color.parseColor("#7CF9C6"));
+        speedText.setText("-- KB/s");
+        osdTop.addView(speedText);
 
-        osdPos = new TextView(this);
-        osdPos.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        osdPos.setTextColor(Color.parseColor("#B3FFFFFF"));
-        osdPos.setText("00:00 / 00:00　　← → 快退快进 10 秒　·　返回 回列表");
-        osd.addView(osdPos);
-
-        FrameLayout.LayoutParams op = new FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams tp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        op.gravity = Gravity.BOTTOM;
-        playerScreen.addView(osd, op);
+        tp.gravity = Gravity.TOP;
+        playerScreen.addView(osdTop, tp);
+
+        // ---- 底部控制条 ----
+        osdBottom = new LinearLayout(this);
+        osdBottom.setOrientation(LinearLayout.VERTICAL);
+        osdBottom.setBackgroundColor(Color.parseColor("#CC000000"));
+        osdBottom.setPadding(dp(32), dp(12), dp(32), dp(16));
+
+        seekBar = new SeekBar(this);
+        seekBar.setMax(1);
+        seekBar.setFocusable(true);
+        seekBar.setFocusableInTouchMode(true);
+        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
+                updateTimeText(progress, player == null ? 0 : safeDuration());
+                if (fromUser && !sb.isPressed()) {
+                    // 遥控器方向键调进度：SeekBar 不会触发 onStopTrackingTouch，这里直接跳
+                    doSeek(progress);
+                }
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar sb) {
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar sb) {
+                doSeek(sb.getProgress());
+            }
+        });
+        osdBottom.addView(seekBar, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(30)));
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(6), 0, 0);
+
+        playBtn = makeButton("⏸ 暂停");
+        Button rewBtn = makeButton("⏪ 10 秒");
+        Button fwdBtn = makeButton("10 秒 ⏩");
+        speedBtn = makeButton("1.0x 倍速");
+        Button listBtn = makeButton("☰ 播放列表");
+
+        row.addView(playBtn);
+        row.addView(rewBtn);
+        row.addView(fwdBtn);
+        row.addView(speedBtn);
+        row.addView(listBtn);
+
+        timeText = new TextView(this);
+        timeText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        timeText.setTextColor(Color.parseColor("#B3FFFFFF"));
+        timeText.setPadding(dp(20), 0, 0, 0);
+        row.addView(timeText);
+        osdBottom.addView(row);
+
+        playBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                togglePlay();
+            }
+        });
+        rewBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                seekBy(-10000);
+            }
+        });
+        fwdBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                seekBy(10000);
+            }
+        });
+        speedBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                cycleSpeed();
+            }
+        });
+        listBtn.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                showListScreen(true);
+            }
+        });
+
+        FrameLayout.LayoutParams bp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        bp.gravity = Gravity.BOTTOM;
+        playerScreen.addView(osdBottom, bp);
 
         spinner = new ProgressBar(this);
-        FrameLayout.LayoutParams sp2 = new FrameLayout.LayoutParams(dp(56), dp(56));
-        sp2.gravity = Gravity.CENTER;
+        FrameLayout.LayoutParams cp = new FrameLayout.LayoutParams(dp(56), dp(56));
+        cp.gravity = Gravity.CENTER;
         spinner.setVisibility(View.GONE);
-        playerScreen.addView(spinner, sp2);
+        playerScreen.addView(spinner, cp);
 
-        playerScreen.setVisibility(View.GONE);
-        root.addView(playerScreen, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        osdTop.setVisibility(View.GONE);
+        osdBottom.setVisibility(View.GONE);
+        return playerScreen;
+    }
 
-        setContentView(root);
+    private Button makeButton(String text) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        b.setFocusable(true);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.rightMargin = dp(10);
+        b.setLayoutParams(lp);
+        return b;
     }
 
     private void toast(String msg) {
@@ -255,39 +349,6 @@ public class MainActivity extends Activity {
     }
 
     // ---------------------------------------------------------------- 列表
-
-    private final Runnable osdTicker = new Runnable() {
-        @Override
-        public void run() {
-            if (!osdVisible || !playerMode) {
-                return;
-            }
-            try {
-                int pos = video.getCurrentPosition();
-                int dur = video.getDuration();
-                osdSeek.setMax(dur > 0 ? dur : 1);
-                osdSeek.setProgress(pos);
-                osdPos.setText(mmss(pos) + " / " + mmss(dur)
-                        + "　　← → 快退快进 10 秒　·　返回 回列表");
-            } catch (Exception ignored) {
-            }
-            ui.postDelayed(this, 500);
-        }
-    };
-
-    private String mmss(int ms) {
-        if (ms <= 0) {
-            return "00:00";
-        }
-        int s = ms / 1000;
-        int h = s / 3600;
-        int m = (s % 3600) / 60;
-        int sec = s % 60;
-        if (h > 0) {
-            return String.format(java.util.Locale.US, "%d:%02d:%02d", h, m, sec);
-        }
-        return String.format(java.util.Locale.US, "%02d:%02d", m, sec);
-    }
 
     private class RowAdapter extends BaseAdapter {
         @Override
@@ -342,26 +403,19 @@ public class MainActivity extends Activity {
 
     private void showListScreen(boolean requestFocus) {
         playerMode = false;
-        hideOsd();
-        try {
-            video.stopPlayback();
-        } catch (Exception ignored) {
-        }
+        hideOsd(false);
+        stopPlayer();
         playerScreen.setVisibility(View.GONE);
         listScreen.setVisibility(View.VISIBLE);
         listHeader.setText("广东珠江 · 录制节目" + (items.isEmpty() ? "" : "（" + items.size() + " 期）"));
         if (items.isEmpty()) {
-            listStatus.setText("还没有录制，或正在获取…\n每晚 21:00 的 GitHub Actions 会自动录制并上传。");
+            listStatus.setText("还没有录制，或正在获取…\n每晚 21:00 的 Cloudflare 定时任务会自动录制并上传。");
         } else {
-            listStatus.setText("共 " + items.size() + " 期　·　最新的在最上面");
+            listStatus.setText("共 " + items.size() + " 期　·　最新的在最上面　·　OK 播放");
         }
         if (requestFocus) {
             list.requestFocus();
-            if (!items.isEmpty()) {
-                list.setSelection(Math.min(currentIndex, items.size() - 1));
-            } else {
-                list.setSelection(0);
-            }
+            list.setSelection(items.isEmpty() ? 0 : Math.min(currentIndex, items.size() - 1));
         }
     }
 
@@ -369,103 +423,334 @@ public class MainActivity extends Activity {
         playerMode = true;
         listScreen.setVisibility(View.GONE);
         playerScreen.setVisibility(View.VISIBLE);
-        video.requestFocus();
     }
 
     // ---------------------------------------------------------------- 播放
 
-    private void play(final Recording r) {
+    private void play(Recording r) {
         showPlayerScreen();
+        prepared = false;
+        playing = false;
+        speedFactor = 1.0f;
+        updateSpeedLabel();
         spinner.setVisibility(View.VISIBLE);
-        osdTitle.setText(r.label());
-        osdPos.setText("正在打开 " + r.assetName);
-        try {
-            video.stopPlayback();
-        } catch (Exception ignored) {
-        }
+        titleText.setText("广东珠江 · " + r.label());
+        timeText.setText("正在打开…");
+        stopPlayer();
+
         exec.execute(new Runnable() {
             @Override
             public void run() {
-                final String realUrl;
-                if (proxy != null && proxy.trim().length() > 0) {
-                    String p = proxy.trim();
-                    if (!p.endsWith("/")) {
-                        p = p + "/";
-                    }
-                    realUrl = p + r.url;
-                } else {
-                    realUrl = GitHubApi.resolveRedirect(r.url, token);
-                }
+                final String realUrl = resolveUrl(r);
                 ui.post(new Runnable() {
                     @Override
                     public void run() {
-                        video.setVideoURI(Uri.parse(realUrl));
-                        video.requestFocus();
-                        video.start();
+                        if (surfaceReady) {
+                            startPlayback(realUrl);
+                        } else {
+                            pendingUrl = realUrl;
+                        }
                     }
                 });
             }
         });
     }
 
-    private void showOsd(boolean autoHide) {
-        osdVisible = true;
-        osd.setVisibility(View.VISIBLE);
-        ui.removeCallbacks(osdTicker);
-        ui.post(osdTicker);
-        ui.removeCallbacks(hideOsdRunnable);
-        if (autoHide) {
-            ui.postDelayed(hideOsdRunnable, 6000);
+    private String resolveUrl(Recording r) {
+        if (proxy != null && proxy.trim().length() > 0) {
+            String p = proxy.trim();
+            if (!p.endsWith("/")) {
+                p = p + "/";
+            }
+            return p + r.url;
         }
+        return GitHubApi.resolveRedirect(r.url, token);
     }
 
-    private void hideOsd() {
-        osdVisible = false;
-        osd.setVisibility(View.GONE);
-        ui.removeCallbacks(osdTicker);
-        ui.removeCallbacks(hideOsdRunnable);
-    }
-
-    private final Runnable hideOsdRunnable = new Runnable() {
-        @Override
-        public void run() {
-            hideOsd();
-        }
-    };
-
-    private void seekBy(int deltaMs) {
+    private void startPlayback(String url) {
+        stopPlayer();
         try {
-            int pos = video.getCurrentPosition();
-            int dur = video.getDuration();
-            int target = pos + deltaMs;
-            if (target < 0) {
-                target = 0;
+            player = new MediaPlayer();
+            player.setDataSource(this, Uri.parse(url));
+            player.setSurface(surface.getHolder().getSurface());
+            player.setOnPreparedListener(new MediaPlayer.OnPreparedListener() {
+                @Override
+                public void onPrepared(MediaPlayer mp) {
+                    prepared = true;
+                    spinner.setVisibility(View.GONE);
+                    seekBar.setMax(Math.max(1, mp.getDuration()));
+                    applySpeed(speedFactor);
+                    mp.start();
+                    playing = true;
+                    updatePlayLabel();
+                    showOsd(true);
+                    ui.post(ticker);
+                }
+            });
+            player.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+                @Override
+                public void onCompletion(MediaPlayer mp) {
+                    playing = false;
+                    updatePlayLabel();
+                    toast("播放结束");
+                    showListScreen(true);
+                }
+            });
+            player.setOnErrorListener(new MediaPlayer.OnErrorListener() {
+                @Override
+                public boolean onError(MediaPlayer mp, int what, int extra) {
+                    spinner.setVisibility(View.GONE);
+                    playing = false;
+                    toast("播放失败(" + what + "/" + extra + ")，换一期试试");
+                    showListScreen(true);
+                    return true;
+                }
+            });
+            player.setOnInfoListener(new MediaPlayer.OnInfoListener() {
+                @Override
+                public boolean onInfo(MediaPlayer mp, int what, int extra) {
+                    if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) {
+                        spinner.setVisibility(View.VISIBLE);
+                    } else if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END
+                            || what == MediaPlayer.MEDIA_INFO_VIDEO_RENDERING_START) {
+                        spinner.setVisibility(View.GONE);
+                    }
+                    return false;
+                }
+            });
+            player.prepareAsync();
+        } catch (Exception e) {
+            spinner.setVisibility(View.GONE);
+            toast("打不开：" + e.getMessage());
+            showListScreen(true);
+        }
+    }
+
+    private void stopPlayer() {
+        ui.removeCallbacks(ticker);
+        if (player != null) {
+            try {
+                player.reset();
+                player.release();
+            } catch (Exception ignored) {
             }
-            if (dur > 0 && target > dur - 800) {
-                target = dur - 800;
+            player = null;
+        }
+        prepared = false;
+        playing = false;
+    }
+
+    private int safeDuration() {
+        try {
+            return player == null ? 0 : player.getDuration();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private int safePosition() {
+        try {
+            return player == null ? 0 : player.getCurrentPosition();
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private void togglePlay() {
+        if (player == null || !prepared) {
+            return;
+        }
+        if (playing) {
+            player.pause();
+            playing = false;
+        } else {
+            player.start();
+            playing = true;
+        }
+        updatePlayLabel();
+        scheduleHide();
+    }
+
+    private void updatePlayLabel() {
+        if (playBtn != null) {
+            playBtn.setText(playing ? "⏸ 暂停" : "▶ 播放");
+        }
+    }
+
+    private void doSeek(int ms) {
+        if (player == null || !prepared) {
+            return;
+        }
+        player.seekTo(ms);
+        updateTimeText(ms, safeDuration());
+        scheduleHide();
+    }
+
+    private void seekBy(int delta) {
+        int dur = safeDuration();
+        int target = safePosition() + delta;
+        if (target < 0) {
+            target = 0;
+        }
+        if (dur > 0 && target > dur - 800) {
+            target = dur - 800;
+        }
+        doSeek(target);
+    }
+
+    private void cycleSpeed() {
+        float[] list = new float[]{0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f};
+        int idx = 0;
+        for (int i = 0; i < list.length; i++) {
+            if (Math.abs(list[i] - speedFactor) < 0.01f) {
+                idx = i;
+                break;
             }
-            video.seekTo(target);
-            showOsd(true);
+        }
+        speedFactor = list[(idx + 1) % list.length];
+        applySpeed(speedFactor);
+        updateSpeedLabel();
+        scheduleHide();
+    }
+
+    private void applySpeed(float f) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M || player == null || !prepared) {
+            return;
+        }
+        try {
+            PlaybackParams pp = player.getPlaybackParams();
+            pp.setSpeed(f);
+            pp.setPitch(1f);
+            player.setPlaybackParams(pp);
+            // 有些机型 setPlaybackParams 会把暂停中的播放器拉起来
+            if (!playing) {
+                player.pause();
+            }
         } catch (Exception ignored) {
         }
     }
 
+    private void updateSpeedLabel() {
+        if (speedBtn != null) {
+            speedBtn.setText(String.format(java.util.Locale.US, "%.2fx 倍速", speedFactor));
+        }
+    }
+
+    private final Runnable ticker = new Runnable() {
+        @Override
+        public void run() {
+            if (playerMode && prepared) {
+                int pos = safePosition();
+                int dur = safeDuration();
+                if (osdVisible && !seekBar.isFocused()) {
+                    seekBar.setProgress(pos);
+                }
+                updateTimeText(pos, dur);
+                tickerSpeed();
+                ui.postDelayed(this, 500);
+            }
+        }
+    };
+
+    private void updateTimeText(int pos, int dur) {
+        if (timeText != null) {
+            timeText.setText(mmss(pos) + " / " + mmss(dur));
+        }
+    }
+
+    private void tickerSpeed() {
+        if (!osdVisible) {
+            return;
+        }
+        long rx = TrafficStats.getUidRxBytes(Process.myUid());
+        if (rx <= 0) {
+            speedText.setText("-- KB/s");
+            lastRx = -1;
+            return;
+        }
+        if (lastRx > 0 && rx >= lastRx) {
+            long delta = (rx - lastRx) * 2;   // ticker 每 500ms 一次 → 换算成 bytes/s
+            speedText.setText(formatSpeed(delta));
+        }
+        lastRx = rx;
+    }
+
+    private String formatSpeed(long bytesPerSec) {
+        if (bytesPerSec < 0) {
+            return "-- KB/s";
+        }
+        double kb = bytesPerSec / 1024.0;
+        if (kb >= 1024) {
+            return String.format(java.util.Locale.US, "%.2f MB/s", kb / 1024.0);
+        }
+        return String.format(java.util.Locale.US, "%.0f KB/s", kb);
+    }
+
+    private String mmss(int ms) {
+        if (ms <= 0) {
+            return "00:00";
+        }
+        int s = ms / 1000;
+        int h = s / 3600;
+        int m = (s % 3600) / 60;
+        int sec = s % 60;
+        if (h > 0) {
+            return String.format(java.util.Locale.US, "%d:%02d:%02d", h, m, sec);
+        }
+        return String.format(java.util.Locale.US, "%02d:%02d", m, sec);
+    }
+
+    // ---------------------------------------------------------------- OSD
+
+    private void showOsd(boolean autoHide) {
+        osdVisible = true;
+        osdTop.setVisibility(View.VISIBLE);
+        osdBottom.setVisibility(View.VISIBLE);
+        if (!osdBottom.hasFocus() && !seekBar.hasFocus()) {
+            playBtn.requestFocus();
+        }
+        if (autoHide) {
+            scheduleHide();
+        }
+    }
+
+    private void hideOsd(boolean focusVideo) {
+        osdVisible = false;
+        osdTop.setVisibility(View.GONE);
+        osdBottom.setVisibility(View.GONE);
+        ui.removeCallbacks(hideRunnable);
+        if (focusVideo) {
+            playerScreen.requestFocus();
+        }
+    }
+
+    private void scheduleHide() {
+        ui.removeCallbacks(hideRunnable);
+        ui.postDelayed(hideRunnable, OSD_TIMEOUT_MS);
+    }
+
+    private final Runnable hideRunnable = new Runnable() {
+        @Override
+        public void run() {
+            hideOsd(true);
+        }
+    };
+
     // ---------------------------------------------------------------- 数据
 
     private void loadReleases(final boolean autoPlay) {
-        spinner.setVisibility(View.GONE);
         listStatus.setText("正在获取 " + owner + "/" + repo + " 的录制列表…");
         exec.execute(new Runnable() {
             @Override
             public void run() {
-                List<Recording> list0 = null;
+                List<Recording> got = null;
                 String err = null;
                 try {
-                    list0 = GitHubApi.fetchReleases(owner, repo, token, 60);
+                    got = GitHubApi.fetchReleases(owner, repo, token, 60);
                 } catch (Exception e) {
                     err = e.getMessage();
                 }
-                final List<Recording> fl = list0;
+                final List<Recording> fl = got;
                 final String fe = err;
                 ui.post(new Runnable() {
                     @Override
@@ -572,6 +857,14 @@ public class MainActivity extends Activity {
     // ---------------------------------------------------------------- 遥控器
 
     @Override
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getAction() == KeyEvent.ACTION_DOWN && osdVisible && playerMode) {
+            scheduleHide();   // 任何操作都重置 15 秒自动收起
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (dialogOpen) {
             return super.onKeyDown(keyCode, event);
@@ -579,34 +872,39 @@ public class MainActivity extends Activity {
         if (playerMode) {
             switch (keyCode) {
                 case KeyEvent.KEYCODE_BACK:
-                    showListScreen(true);
+                    if (osdVisible) {
+                        hideOsd(true);
+                    } else {
+                        showListScreen(true);
+                    }
                     return true;
                 case KeyEvent.KEYCODE_DPAD_CENTER:
                 case KeyEvent.KEYCODE_ENTER:
                 case KeyEvent.KEYCODE_NUMPAD_ENTER:
-                    if (osdVisible) {
-                        hideOsd();
-                    } else {
+                    if (!osdVisible) {
                         showOsd(true);
+                        return true;
                     }
+                    return super.onKeyDown(keyCode, event);
+                case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
+                    togglePlay();
                     return true;
                 case KeyEvent.KEYCODE_DPAD_LEFT:
                 case KeyEvent.KEYCODE_MEDIA_REWIND:
-                    seekBy(-10000);
-                    return true;
+                    if (!osdVisible) {
+                        seekBy(-10000);
+                        showOsd(true);
+                        return true;
+                    }
+                    return super.onKeyDown(keyCode, event);
                 case KeyEvent.KEYCODE_DPAD_RIGHT:
                 case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
-                    seekBy(10000);
-                    return true;
-                case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
-                    if (video.isPlaying()) {
-                        video.pause();
-                        osdTitle.setText("已暂停");
-                    } else {
-                        video.start();
+                    if (!osdVisible) {
+                        seekBy(10000);
+                        showOsd(true);
+                        return true;
                     }
-                    showOsd(true);
-                    return true;
+                    return super.onKeyDown(keyCode, event);
                 case KeyEvent.KEYCODE_MENU:
                 case KeyEvent.KEYCODE_SETTINGS:
                     openSettings();
@@ -615,7 +913,6 @@ public class MainActivity extends Activity {
                     return super.onKeyDown(keyCode, event);
             }
         }
-        // 列表页：方向键/OK 交给 ListView 自己处理
         if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_SETTINGS) {
             openSettings();
             return true;
@@ -627,10 +924,7 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         ui.removeCallbacksAndMessages(null);
-        try {
-            video.stopPlayback();
-        } catch (Exception ignored) {
-        }
+        stopPlayer();
         exec.shutdownNow();
     }
 }
