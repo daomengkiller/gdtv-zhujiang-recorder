@@ -85,10 +85,13 @@ public class MainActivity extends Activity {
     private TextView titleText, speedText, timeText, speedBtn;
     private SeekBar seekBar;
     private Button playBtn;
+    private Button[] buttons;
     private ProgressBar spinner;
     private boolean osdVisible = false;
     private float speedFactor = 1.0f;
     private long lastRx = -1;
+    private int focusRow = 0;   // 0=按钮行 1=进度条
+    private int focusIdx = 0;   // 按钮行里的第几个
 
     // ---------------------------------------------------------------- 生命周期
 
@@ -221,7 +224,7 @@ public class MainActivity extends Activity {
         speedText = new TextView(this);
         speedText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         speedText.setTextColor(Color.parseColor("#7CF9C6"));
-        speedText.setText("-- KB/s");
+        speedText.setText("网速 --");
         osdTop.addView(speedText);
 
         FrameLayout.LayoutParams tp = new FrameLayout.LayoutParams(
@@ -237,8 +240,7 @@ public class MainActivity extends Activity {
 
         seekBar = new SeekBar(this);
         seekBar.setMax(1);
-        seekBar.setFocusable(true);
-        seekBar.setFocusableInTouchMode(true);
+        seekBar.setFocusable(false);       // 焦点由我们自己管理
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar sb, int progress, boolean fromUser) {
@@ -277,6 +279,7 @@ public class MainActivity extends Activity {
         row.addView(fwdBtn);
         row.addView(speedBtn);
         row.addView(listBtn);
+        buttons = new Button[]{playBtn, rewBtn, fwdBtn, speedBtn, listBtn};
 
         timeText = new TextView(this);
         timeText.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
@@ -336,12 +339,34 @@ public class MainActivity extends Activity {
         Button b = new Button(this);
         b.setText(text);
         b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        b.setFocusable(true);
+        b.setTextColor(Color.WHITE);
+        b.setBackgroundColor(Color.parseColor("#33FFFFFF"));
+        b.setFocusable(false);             // 焦点由 dispatchKeyEvent 自己画，避免系统抢方向键
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.rightMargin = dp(10);
         b.setLayoutParams(lp);
         return b;
+    }
+
+    /** 自己画焦点：选中的按钮橙色、进度条行聚焦时进度条变橙 */
+    private void updateFocusVisual() {
+        if (buttons != null) {
+            for (int i = 0; i < buttons.length; i++) {
+                boolean on = (focusRow == 0 && i == focusIdx);
+                buttons[i].setBackgroundColor(Color.parseColor(on ? "#FFFF8A00" : "#33FFFFFF"));
+                buttons[i].setTextColor(on ? Color.BLACK : Color.WHITE);
+            }
+        }
+        boolean progOn = (focusRow == 1);
+        try {
+            android.content.res.ColorStateList cs = android.content.res.ColorStateList.valueOf(
+                    progOn ? Color.parseColor("#FFFF8A00") : Color.parseColor("#FFFFFFFF"));
+            seekBar.setProgressTintList(cs);
+            seekBar.setThumbTintList(cs);
+        } catch (Exception ignored) {
+        }
+        timeText.setTextColor(progOn ? Color.parseColor("#FFFF8A00") : Color.parseColor("#B3FFFFFF"));
     }
 
     private void toast(String msg) {
@@ -642,7 +667,7 @@ public class MainActivity extends Activity {
             if (playerMode && prepared) {
                 int pos = safePosition();
                 int dur = safeDuration();
-                if (osdVisible && !seekBar.isFocused()) {
+                if (osdVisible && focusRow != 1) {
                     seekBar.setProgress(pos);
                 }
                 updateTimeText(pos, dur);
@@ -664,7 +689,7 @@ public class MainActivity extends Activity {
         }
         long rx = TrafficStats.getUidRxBytes(Process.myUid());
         if (rx <= 0) {
-            speedText.setText("-- KB/s");
+            speedText.setText("网速 --");
             lastRx = -1;
             return;
         }
@@ -677,13 +702,13 @@ public class MainActivity extends Activity {
 
     private String formatSpeed(long bytesPerSec) {
         if (bytesPerSec < 0) {
-            return "-- KB/s";
+            return "网速 --";
         }
         double kb = bytesPerSec / 1024.0;
         if (kb >= 1024) {
-            return String.format(java.util.Locale.US, "%.2f MB/s", kb / 1024.0);
+            return String.format(java.util.Locale.US, "网速 %.2f MB/s", kb / 1024.0);
         }
-        return String.format(java.util.Locale.US, "%.0f KB/s", kb);
+        return String.format(java.util.Locale.US, "网速 %.0f KB/s", kb);
     }
 
     private String mmss(int ms) {
@@ -706,11 +731,46 @@ public class MainActivity extends Activity {
         osdVisible = true;
         osdTop.setVisibility(View.VISIBLE);
         osdBottom.setVisibility(View.VISIBLE);
-        if (!osdBottom.hasFocus() && !seekBar.hasFocus()) {
-            playBtn.requestFocus();
-        }
+        focusRow = 0;
+        focusIdx = 0;
+        updateFocusVisual();
         if (autoHide) {
             scheduleHide();
+        }
+    }
+
+    private void moveFocus(int delta) {
+        if (buttons == null) {
+            return;
+        }
+        focusIdx = (focusIdx + delta + buttons.length) % buttons.length;
+        updateFocusVisual();
+    }
+
+    private void onOk() {
+        if (focusRow == 1) {
+            focusRow = 0;
+            updateFocusVisual();
+            return;
+        }
+        switch (focusIdx) {
+            case 0:
+                togglePlay();
+                break;
+            case 1:
+                seekBy(-10000);
+                break;
+            case 2:
+                seekBy(10000);
+                break;
+            case 3:
+                cycleSpeed();
+                break;
+            case 4:
+                showListScreen(true);
+                break;
+            default:
+                break;
         }
     }
 
@@ -858,60 +918,91 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
-        if (event.getAction() == KeyEvent.ACTION_DOWN && osdVisible && playerMode) {
-            scheduleHide();   // 任何操作都重置 15 秒自动收起
+        if (dialogOpen || !playerMode || event.getAction() != KeyEvent.ACTION_DOWN) {
+            return super.dispatchKeyEvent(event);
         }
-        return super.dispatchKeyEvent(event);
+        int k = event.getKeyCode();
+        if (k == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
+            togglePlay();
+            return true;
+        }
+
+        if (osdVisible) {
+            scheduleHide();          // 任何操作都重置 15 秒自动收起
+            switch (k) {
+                case KeyEvent.KEYCODE_DPAD_LEFT:
+                case KeyEvent.KEYCODE_MEDIA_REWIND:
+                    if (focusRow == 1) {
+                        seekBy(-10000);
+                    } else {
+                        moveFocus(-1);
+                    }
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_RIGHT:
+                case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
+                    if (focusRow == 1) {
+                        seekBy(10000);
+                    } else {
+                        moveFocus(1);
+                    }
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_UP:
+                    focusRow = 1;
+                    updateFocusVisual();
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    focusRow = 0;
+                    updateFocusVisual();
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_CENTER:
+                case KeyEvent.KEYCODE_ENTER:
+                case KeyEvent.KEYCODE_NUMPAD_ENTER:
+                    onOk();
+                    return true;
+                case KeyEvent.KEYCODE_BACK:
+                    hideOsd(true);
+                    return true;
+                case KeyEvent.KEYCODE_MENU:
+                case KeyEvent.KEYCODE_SETTINGS:
+                    openSettings();
+                    return true;
+                default:
+                    return super.dispatchKeyEvent(event);
+            }
+        }
+
+        switch (k) {
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_ENTER:
+            case KeyEvent.KEYCODE_NUMPAD_ENTER:
+                showOsd(true);
+                return true;
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+            case KeyEvent.KEYCODE_MEDIA_REWIND:
+                seekBy(-10000);
+                showOsd(true);
+                return true;
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+            case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
+                seekBy(10000);
+                showOsd(true);
+                return true;
+            case KeyEvent.KEYCODE_BACK:
+                showListScreen(true);
+                return true;
+            case KeyEvent.KEYCODE_MENU:
+            case KeyEvent.KEYCODE_SETTINGS:
+                openSettings();
+                return true;
+            default:
+                return super.dispatchKeyEvent(event);
+        }
     }
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (dialogOpen) {
             return super.onKeyDown(keyCode, event);
-        }
-        if (playerMode) {
-            switch (keyCode) {
-                case KeyEvent.KEYCODE_BACK:
-                    if (osdVisible) {
-                        hideOsd(true);
-                    } else {
-                        showListScreen(true);
-                    }
-                    return true;
-                case KeyEvent.KEYCODE_DPAD_CENTER:
-                case KeyEvent.KEYCODE_ENTER:
-                case KeyEvent.KEYCODE_NUMPAD_ENTER:
-                    if (!osdVisible) {
-                        showOsd(true);
-                        return true;
-                    }
-                    return super.onKeyDown(keyCode, event);
-                case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
-                    togglePlay();
-                    return true;
-                case KeyEvent.KEYCODE_DPAD_LEFT:
-                case KeyEvent.KEYCODE_MEDIA_REWIND:
-                    if (!osdVisible) {
-                        seekBy(-10000);
-                        showOsd(true);
-                        return true;
-                    }
-                    return super.onKeyDown(keyCode, event);
-                case KeyEvent.KEYCODE_DPAD_RIGHT:
-                case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
-                    if (!osdVisible) {
-                        seekBy(10000);
-                        showOsd(true);
-                        return true;
-                    }
-                    return super.onKeyDown(keyCode, event);
-                case KeyEvent.KEYCODE_MENU:
-                case KeyEvent.KEYCODE_SETTINGS:
-                    openSettings();
-                    return true;
-                default:
-                    return super.onKeyDown(keyCode, event);
-            }
         }
         if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_SETTINGS) {
             openSettings();
