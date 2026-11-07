@@ -1,0 +1,9 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "gdtv-cron"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# 每天 20:30 中国时区（UTC+8 → 12:30 UTC）触发一次录制
+# 需要的话可以加多个，Free 计划每个账号最多 5 个 cron trigger
+[triggers]
+crons = ["30 12 * * *"]
