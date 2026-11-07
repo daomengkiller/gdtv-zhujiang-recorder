@@ -32,6 +32,10 @@ on:
         description: '转码档位: 720p(默认) / 480p / off(直接复制，最大画质但体积大)'
         required: false
         default: '720p'
+      force:
+        description: '1 = 忽略“当天已录就跳过”的幂等（测试用，可同一天存多段）'
+        required: false
+        default: '0'
 
 permissions:
   contents: write
@@ -45,6 +49,7 @@ env:
   START_HHMM: ${{ github.event.inputs.start || '21:00' }}
   END_HHMM: ${{ github.event.inputs.end || '22:00' }}
   DURATION: ${{ github.event.inputs.duration || '0' }}
+  FORCE: ${{ github.event.inputs.force || '0' }}
   WAIT_MAX_MIN: '45'         # 外部 20:30 触发 → 最多等 45 分钟仍能赶上 21:00
   STREAM_URLS: ${{ github.event.inputs.stream_urls }}
   TRANSCODE: ${{ github.event.inputs.transcode || '720p' }}
