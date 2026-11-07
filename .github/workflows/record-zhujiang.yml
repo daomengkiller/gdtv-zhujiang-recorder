@@ -61,10 +61,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 安装 ffmpeg
+      - name: 准备 ffmpeg
+        timeout-minutes: 10
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg curl
+          if command -v ffmpeg >/dev/null 2>&1; then
+            echo "runner 自带 ffmpeg: $(ffmpeg -version | head -1)"
+            exit 0
+          fi
+          echo "未自带，安装中…"
+          sudo apt-get update -qq -o Acquire::Retries=3 -o Acquire::http::Timeout=20
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            -o Acquire::Retries=3 -o Acquire::http::Timeout=20 ffmpeg
           ffmpeg -version | head -1
 
       - name: 录制
