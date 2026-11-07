@@ -2,6 +2,9 @@ plugins {
     id 'com.android.application'
 }
 
+// 固定签名：CI 从 secret 还原 app/gdtv.jks，保证每次构建签名一致（电视上才能覆盖安装）
+def releaseKeystore = file('gdtv.jks')
+
 android {
     namespace 'cn.cjw.gdtvrec'
     compileSdk 34
@@ -14,9 +17,28 @@ android {
         versionName '1.2.0'
     }
 
+    signingConfigs {
+        if (releaseKeystore.exists()) {
+            release {
+                storeFile releaseKeystore
+                storePassword System.getenv('KEYSTORE_PASS') ?: 'gdtv1812'
+                keyAlias System.getenv('KEY_ALIAS') ?: 'gdtv'
+                keyPassword System.getenv('KEY_PASS') ?: 'gdtv1812'
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
+            if (releaseKeystore.exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
+        debug {
+            if (releaseKeystore.exists()) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 

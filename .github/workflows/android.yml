@@ -40,8 +40,30 @@ jobs:
           "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0" >/dev/null || true
           ls "$ANDROID_HOME/platforms"
 
+      - name: 还原固定签名 keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "::warning:: 没有 KEYSTORE_B64，退回 debug 签名（每次构建签名会变，覆盖安装会失败）"
+            exit 0
+          fi
+          echo "$KEYSTORE_B64" | base64 -d > app/gdtv.jks
+          ls -l app/gdtv.jks
+
       - name: 构建 APK
-        run: chmod +x ./gradlew && ./gradlew --no-daemon assembleDebug
+        env:
+          KEYSTORE_PASS: ${{ secrets.KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASS }}
+        run: |
+          chmod +x ./gradlew
+          if [ -f app/gdtv.jks ]; then
+            ./gradlew --no-daemon assembleRelease
+          else
+            ./gradlew --no-daemon assembleDebug
+          fi
 
       - name: 归档到 Release (android-latest)
         env:
@@ -49,8 +71,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk dist/gdtv-recorder.apk
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk dist/gdtv-recorder.apk
+          else
+            cp app/build/outputs/apk/debug/app-debug.apk dist/gdtv-recorder.apk
+          fi
           ls -lh dist
+          "${ANDROID_HOME}/build-tools/34.0.0/apksigner" verify --print-certs dist/gdtv-recorder.apk | head -3 || true
           gh release view android-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
             || gh release create android-latest --repo "$GITHUB_REPOSITORY" \
                  --title "Android TV 客户端 APK" \
