@@ -92,7 +92,7 @@ jobs:
             "$START_HHMM" "$END_HHMM" "$OUT_NAME" "$((OUT_BYTES/1024/1024))" "$GITHUB_EVENT_NAME" "$(git rev-parse --short HEAD)")
           gh release create "$OUT_TAG" "$OUT_FILE" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "广东珠江 ${OUT_TAG#rec-}" \
+            --title "广东珠江 ${OUT_TITLE:-${OUT_TAG#rec-}}" \
             --notes "$NOTES" \
             --latest
 

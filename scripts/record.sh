@@ -102,7 +102,8 @@ probe_playlist() {
 }
 
 # ---------- 3. 录制 ----------
-stamp="$(TZ=$TZ_CN date +%Y%m%d-%H%M)"
+stamp="$(TZ=$TZ_CN date +%Y%m%d-%H%M%S)"
+title_stamp="$(TZ=$TZ_CN date '+%Y-%m-%d %H:%M')"
 out_file="${OUT_DIR}/gdtv-zhujiang-${stamp}.mp4"
 tmp_file="${OUT_DIR}/.part-${stamp}.mp4"
 recorded=0
@@ -178,6 +179,7 @@ if [ -n "${GITHUB_ENV:-}" ]; then
     echo "OUT_FILE=${out_file}"
     echo "OUT_NAME=$(basename "$out_file")"
     echo "OUT_TAG=rec-${stamp}"
+    echo "OUT_TITLE=${title_stamp}"
     echo "OUT_BYTES=${bytes}"
   } >> "$GITHUB_ENV"
 fi
