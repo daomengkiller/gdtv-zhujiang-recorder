@@ -4,11 +4,11 @@ name: record-gdtv-zhujiang
 # 每天中国时区 21:00-22:00 录制，成片上传 Release，并按配额自动删最旧。
 on:
   schedule:
-    # 备份槽位：GitHub 的 cron 对某些仓库不生效/会整体延迟（2026-11-06 实测 0 次触发）。
-    # 真正的触发主力是 chain.yml（自维持链）；这里留着当第二保险，脚本幂等不会重复录。
-    - cron: '*/5 * * * *'   # 临时探针（验证完删除）
-    - cron: '30 12 * * *'   # 20:30 CST 启动，等到 21:00 开录
-    - cron: '20 13 * * *'   # 21:20 CST 兜底（错过第一槽时录到 22:00 的剩余部分）
+    # 实测结论（2026-11-07）：本环境的 schedule 不是不触发，而是「注册后很久才开始生效」，
+    # 且每次派发比 cron 设定晚 3~8 小时（同账号老仓库 devops 的 data 见 README）。
+    # 因此 cron 故意设在 21:00 之前若干小时，让任务「早到」，再由脚本等到 21:00 准点开录。
+    - cron: '0 6 * * *'    # 14:00 CST，实测会晚 3~8h 派发 → 落在 17:00~22:00 CST
+    - cron: '0 9 * * *'    # 17:00 CST，实测会晚 3~8h 派发 → 落在 20:00~次日 02:00 CST
   workflow_dispatch:
     inputs:
       start:
@@ -44,7 +44,7 @@ env:
   START_HHMM: ${{ github.event.inputs.start || '21:00' }}
   END_HHMM: ${{ github.event.inputs.end || '22:00' }}
   DURATION: ${{ github.event.inputs.duration || '0' }}
-  WAIT_MAX_MIN: '70'
+  WAIT_MAX_MIN: '280'
   STREAM_URLS: ${{ github.event.inputs.stream_urls }}
   TRANSCODE: ${{ github.event.inputs.transcode || '720p' }}
   # ---- 存储配额：超出后从最旧的录制开始删 ----
@@ -57,7 +57,7 @@ jobs:
   record:
     name: 录制 广东珠江
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v4
 

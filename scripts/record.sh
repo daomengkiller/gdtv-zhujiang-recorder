@@ -11,7 +11,7 @@ export TZ="${TZ:-$TZ_CN}"
 
 START_HHMM="${START_HHMM:-21:00}"
 END_HHMM="${END_HHMM:-22:00}"
-WAIT_MAX_MIN="${WAIT_MAX_MIN:-70}"
+WAIT_MAX_MIN="${WAIT_MAX_MIN:-280}"      # 最长提前等待：4h40m（job 6h 上限内还能录满 1 小时）
 DURATION_OVERRIDE="${DURATION:-0}"       # >0 时忽略时间窗，立刻录这么多秒（测试用）
 MIN_BYTES="${MIN_BYTES:-500000}"          # 小于此大小的产物视为失败
 # 转码档位：off(直接复制，约 1.1GB/小时) | 720p(约 0.5GB/小时，电视下载友好) | 480p(约 0.3GB/小时)
